@@ -17,8 +17,6 @@ def main():
     df_2025 = pd.read_csv("pentagon_budget_increases_2025.csv")
     df_2024 = pd.read_csv("pentagon_budget_increases_2024.csv")
     
-    # Take only first 10 rows of 2025 data for testing
-    df_2025 = df_2025
     
     # Process amounts
     df_2025["House Amount"] = df_2025["House Amount (in thousands)"].apply(clean_amount)

@@ -8,6 +8,14 @@ from typing import List, Dict, Tuple
 import re
 from datetime import datetime, timedelta
 
+# Set page config for wide layout
+st.set_page_config(
+    page_title="Defense Contract Analysis Tool",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # Initialize the sentence transformer model
 def load_model():
     return SentenceTransformer('all-MiniLM-L6-v2')
@@ -27,7 +35,7 @@ def load_data():
     df_2025 = pd.read_csv(base_url + "pentagon_budget_increases_2025.csv")
     df_2024 = pd.read_csv(base_url + "pentagon_budget_increases_2024.csv")
     # Take only first 10 rows of 2025 data for testing
-    df_2025 = df_2025.head(10)
+    df_2025 = df_2025
     df_2024 = df_2024
     return df_2025, df_2024
 
@@ -152,6 +160,15 @@ def find_similar_programs(program_desc: str, embeddings_data: Dict, threshold: f
         st.error(f"Error finding similar programs: {str(e)}")
         return []
 
+def load_results():
+    """Load pre-computed results."""
+    try:
+        with open('results.pkl', 'rb') as f:
+            return pickle.load(f)
+    except Exception as e:
+        st.error(f"Error loading results: {str(e)}")
+        return None
+
 def apply_filters(df: pd.DataFrame, filters: Dict) -> pd.DataFrame:
     """Apply filters to the dataframe."""
     filtered_df = df.copy()
@@ -162,102 +179,16 @@ def apply_filters(df: pd.DataFrame, filters: Dict) -> pd.DataFrame:
 
 def main():
     st.title("Defense Contract Analysis Tool")
-    st.write("Testing with first 10 rows of 2025 data")
     
-    # Add a progress bar
-    progress_bar = st.progress(0)
-    
-    # Load data
-    df_2025, df_2024 = load_data()
-    
-    # Load embeddings
-    embeddings_data = load_embeddings()
-    if embeddings_data is None:
-        st.error("Failed to load embeddings. Please ensure embeddings.pkl is present.")
+    # Load pre-computed results
+    results_data = load_results()
+    if results_data is None:
+        st.error("Failed to load results. Please ensure results.pkl is present.")
         return
     
-    # Process amounts for both years
-    df_2025["House Amount"] = df_2025["House Amount (in thousands)"].apply(clean_amount)
-    df_2025["Senate Amount"] = df_2025["Senate Amount (in thousands)"].apply(clean_amount)
-    df_2024["House Amount"] = df_2024["House Amount (in thousands)"].apply(clean_amount)
-    df_2024["Senate Amount"] = df_2024["Senate Amount (in thousands)"].apply(clean_amount)
-    
-    # Create results container
-    results_2025 = []
-    
-    # Add a status message
-    status_text = st.empty()
-    
-    # Process each 2025 program
-    total_programs = len(df_2025)
-    for idx, (_, row) in enumerate(df_2025.iterrows()):
-        # Update progress
-        progress = (idx + 1) / total_programs
-        progress_bar.progress(progress)
-        status_text.text(f"Processing program {idx + 1} of {total_programs}")
-        
-        program_desc = row["Program Increase"]
-        if pd.isna(program_desc):
-            continue
-            
-        # Find similar programs from 2024
-        similar_programs = find_similar_programs(program_desc, embeddings_data)
-        
-        # Generate keywords and query USAspending
-        keywords = generate_keywords(program_desc)
-        awards = query_usaspending(keywords, row["House Amount"], row["Senate Amount"])
-        
-        # Find best matching award
-        best_match = None
-        award_amount = 0
-        if awards:
-            total_budget = row["House Amount"] + row["Senate Amount"]
-            
-            # First try to find a match based on description
-            award_descriptions = [award.get("Award Description", "") for award in awards if award.get("Award Description")]
-            if award_descriptions:
-                # Use the same similarity function for award descriptions
-                award_similarities = find_similar_programs(program_desc, embeddings_data)
-                if award_similarities:
-                    best_match_idx = award_descriptions.index(award_similarities[0][0])
-                    best_match = awards[best_match_idx]
-                    award_amount = best_match.get("Award Amount", 0)
-            
-            # If no description match found, find the award with amount closest to total budget
-            if not best_match and awards:
-                # Calculate difference between each award amount and total budget
-                amount_differences = [
-                    (abs(award.get("Award Amount", 0) - total_budget), award)
-                    for award in awards
-                ]
-                # Sort by difference and take the closest match
-                amount_differences.sort(key=lambda x: x[0])
-                best_match = amount_differences[0][1]
-                award_amount = best_match.get("Award Amount", 0)
-        
-        # Calculate percentage deviation
-        total_budget = row["House Amount"] + row["Senate Amount"]
-        if total_budget > 0:
-            deviation = ((award_amount - total_budget) / total_budget) * 100
-        else:
-            deviation = 0
-        
-        # Add to results
-        result = {
-            "Program Description": program_desc,
-            "Matched Company/Institution": best_match["Recipient Name"] if best_match else "",
-            "Matched Place of Performance": best_match["Place of Performance"] if best_match else "",
-            "Award Amount": f"${award_amount:,.2f}",
-            "Matched Award Deviation": f"{deviation:+.1f}%",  # + for positive, - for negative
-            "House Amount": f"${row['House Amount']:,.2f}",
-            "Senate Amount": f"${row['Senate Amount']:,.2f}",
-            "Similar 2024 Programs": [f"Row {idx+1}: {prog}" for prog, _, idx in similar_programs[:3]]
-        }
-        results_2025.append(result)
-    
-    # Clear progress indicators
-    progress_bar.empty()
-    status_text.empty()
+    results_2025 = results_data['results_2025']
+    df_2024 = results_data['df_2024']
+    df_2025 = results_data['df_2025']
     
     # Create tabs for 2025 and 2024 data
     tab1, tab2 = st.tabs(["2025 Programs", "2024 Programs"])
@@ -267,19 +198,23 @@ def main():
         if results_2025:
             df_results_2025 = pd.DataFrame(results_2025)
             
-            # Add filters
-            st.subheader("Filters")
-            col1, col2 = st.columns(2)
+            # Create two columns for filters
+            col1, col2, col3 = st.columns(3)
             
             with col1:
+                st.subheader("Program Filters")
                 program_filter = st.text_input("Filter by Program Description", "")
                 company_filter = st.text_input("Filter by Company/Institution", "")
-                location_filter = st.text_input("Filter by Place of Performance", "")
             
             with col2:
+                st.subheader("Location Filters")
+                location_filter = st.text_input("Filter by Place of Performance", "")
+                similar_programs_filter = st.text_input("Filter by Similar 2024 Programs", "")
+            
+            with col3:
+                st.subheader("Amount Filters")
                 house_amount_filter = st.text_input("Filter by House Amount", "")
                 senate_amount_filter = st.text_input("Filter by Senate Amount", "")
-                similar_programs_filter = st.text_input("Filter by Similar 2024 Programs", "")
             
             # Apply filters
             filters = {
@@ -297,7 +232,7 @@ def main():
             st.dataframe(
                 filtered_df_2025,
                 use_container_width=True,
-                height=400,
+                height=600,
                 column_config={
                     "Program Description": st.column_config.TextColumn(
                         "Program Description",
@@ -309,10 +244,10 @@ def main():
                         width="medium",
                         help="Name of the company or institution"
                     ),
-                    "Matched Place of Performance": st.column_config.TextColumn(
-                        "Matched Place of Performance",
-                        width="medium",
-                        help="Location where the work will be performed"
+                    "District": st.column_config.TextColumn(
+                        "District",
+                        width="small",
+                        help="Congressional district of the company (State-District)"
                     ),
                     "House Amount": st.column_config.TextColumn(
                         "House Amount",
@@ -339,7 +274,17 @@ def main():
                         width="large",
                         help="Similar programs from 2024 with row numbers"
                     )
-                }
+                },
+                column_order=[
+                    "Program Description",
+                    "Matched Company/Institution",
+                    "District",
+                    "House Amount",
+                    "Senate Amount",
+                    "Award Amount",
+                    "Matched Award Deviation",
+                    "Similar 2024 Programs"
+                ]
             )
             
             # Add download button for 2025 data
@@ -362,14 +307,15 @@ def main():
         df_2024_display.index = df_2024_display.index + 1  # Make index 1-based
         df_2024_display.index.name = "Row"
         
-        # Add filters for 2024 data
-        st.subheader("Filters")
+        # Create two columns for filters
         col1, col2 = st.columns(2)
         
         with col1:
+            st.subheader("Program Filters")
             program_filter_2024 = st.text_input("Filter by Program Description (2024)", "")
         
         with col2:
+            st.subheader("Amount Filters")
             house_amount_filter_2024 = st.text_input("Filter by House Amount (2024)", "")
             senate_amount_filter_2024 = st.text_input("Filter by Senate Amount (2024)", "")
         
@@ -386,7 +332,7 @@ def main():
         st.dataframe(
             filtered_df_2024,
             use_container_width=True,
-            height=400,
+            height=600,
             column_config={
                 "Program Increase": st.column_config.TextColumn(
                     "Program Description",
