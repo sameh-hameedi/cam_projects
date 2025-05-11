@@ -12,8 +12,10 @@ def load_model():
     return SentenceTransformer('all-MiniLM-L6-v2')
 
 def load_data():
-    df_2025 = pd.read_csv("pentagon_budget_increases_2025.csv")
-    df_2024 = pd.read_csv("pentagon_budget_increases_2024.csv")
+    # Use GitHub raw URLs for the data files
+    base_url = "https://raw.githubusercontent.com/sameh-hameedi/cam_projects/main/"
+    df_2025 = pd.read_csv(base_url + "pentagon_budget_increases_2025.csv")
+    df_2024 = pd.read_csv(base_url + "pentagon_budget_increases_2024.csv")
     # Take only first 10 rows of 2025 data for testing
     df_2025 = df_2025.head(10)
     df_2024 = df_2024
