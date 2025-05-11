@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
+import pickle
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Tuple
 import re
@@ -10,6 +11,15 @@ from datetime import datetime, timedelta
 # Initialize the sentence transformer model
 def load_model():
     return SentenceTransformer('all-MiniLM-L6-v2')
+
+def load_embeddings():
+    """Load pre-computed embeddings."""
+    try:
+        with open('embeddings.pkl', 'rb') as f:
+            return pickle.load(f)
+    except Exception as e:
+        st.error(f"Error loading embeddings: {str(e)}")
+        return None
 
 def load_data():
     # Use GitHub raw URLs for the data files
@@ -112,26 +122,32 @@ def query_usaspending(keywords: List[str], house_amount: float, senate_amount: f
         st.error(f"Error querying USAspending.gov: {str(e)}")
         return []
 
-def find_similar_programs(program_desc: str, model, all_programs: List[str], threshold: float = 0.75) -> List[Tuple[str, float, int]]:
-    """Find similar programs using embeddings."""
-    if not program_desc or not all_programs:
-        return []
-        
-    # Filter out None values and empty strings
-    valid_programs = [p for p in all_programs if p and not pd.isna(p)]
-    if not valid_programs:
+def find_similar_programs(program_desc: str, embeddings_data: Dict, threshold: float = 0.75) -> List[Tuple[str, float, int]]:
+    """Find similar programs using pre-computed embeddings."""
+    if not program_desc or not embeddings_data:
         return []
         
     try:
-        program_embedding = model.encode(program_desc)
-        all_embeddings = model.encode(valid_programs)
+        # Get embeddings for 2024 programs
+        programs_2024 = embeddings_data['programs_2024']
+        embeddings_2024 = embeddings_data['embeddings_2024']
         
-        similarities = np.dot(all_embeddings, program_embedding) / (
-            np.linalg.norm(all_embeddings, axis=1) * np.linalg.norm(program_embedding)
-        )
+        # Find the index of the current program in 2025 data
+        programs_2025 = embeddings_data['programs_2025']
+        embeddings_2025 = embeddings_data['embeddings_2025']
         
-        similar_programs = [(prog, sim, idx) for idx, (prog, sim) in enumerate(zip(valid_programs, similarities)) if sim > threshold]
-        return sorted(similar_programs, key=lambda x: x[1], reverse=True)
+        if program_desc in programs_2025:
+            idx = programs_2025.index(program_desc)
+            program_embedding = embeddings_2025[idx]
+            
+            # Calculate similarities with 2024 programs
+            similarities = np.dot(embeddings_2024, program_embedding) / (
+                np.linalg.norm(embeddings_2024, axis=1) * np.linalg.norm(program_embedding)
+            )
+            
+            similar_programs = [(prog, sim, idx) for idx, (prog, sim) in enumerate(zip(programs_2024, similarities)) if sim > threshold]
+            return sorted(similar_programs, key=lambda x: x[1], reverse=True)
+        return []
     except Exception as e:
         st.error(f"Error finding similar programs: {str(e)}")
         return []
@@ -154,17 +170,17 @@ def main():
     # Load data
     df_2025, df_2024 = load_data()
     
-    # Load model
-    model = load_model()
+    # Load embeddings
+    embeddings_data = load_embeddings()
+    if embeddings_data is None:
+        st.error("Failed to load embeddings. Please ensure embeddings.pkl is present.")
+        return
     
     # Process amounts for both years
     df_2025["House Amount"] = df_2025["House Amount (in thousands)"].apply(clean_amount)
     df_2025["Senate Amount"] = df_2025["Senate Amount (in thousands)"].apply(clean_amount)
     df_2024["House Amount"] = df_2024["House Amount (in thousands)"].apply(clean_amount)
     df_2024["Senate Amount"] = df_2024["Senate Amount (in thousands)"].apply(clean_amount)
-    
-    # Generate embeddings for all programs
-    all_programs_2024 = df_2024["Program Increase"].dropna().tolist()
     
     # Create results container
     results_2025 = []
@@ -185,7 +201,7 @@ def main():
             continue
             
         # Find similar programs from 2024
-        similar_programs = find_similar_programs(program_desc, model, all_programs_2024)
+        similar_programs = find_similar_programs(program_desc, embeddings_data)
         
         # Generate keywords and query USAspending
         keywords = generate_keywords(program_desc)
@@ -200,7 +216,8 @@ def main():
             # First try to find a match based on description
             award_descriptions = [award.get("Award Description", "") for award in awards if award.get("Award Description")]
             if award_descriptions:
-                award_similarities = find_similar_programs(program_desc, model, award_descriptions)
+                # Use the same similarity function for award descriptions
+                award_similarities = find_similar_programs(program_desc, embeddings_data)
                 if award_similarities:
                     best_match_idx = award_descriptions.index(award_similarities[0][0])
                     best_match = awards[best_match_idx]
